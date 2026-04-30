@@ -79,15 +79,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // --- 处理登录请求 ---
   if (message.type === "LOGIN") {
-    loginWithGitHub()
-      .then(async (token) => {
-        await chrome.storage.local.set({ github_token: token });
-        await initCloudStorage(token);
-        sendResponse({ status: "success", token: token });
-      })
-      .catch(err => {
+      (async () => {
+        try {
+          const token = await loginWithGitHub();
+          await chrome.storage.local.set({ github_token: token });
+          await initCloudStorage(token);
+          sendResponse({ status: "success", token: token });
+      } catch (err) {
         sendResponse({ status: "error", message: err.message });
-      });
+      }
+    })();
     return true; // 保持异步连接
   }
 });
