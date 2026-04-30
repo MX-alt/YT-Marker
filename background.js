@@ -77,17 +77,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // --- 新增：处理登录请求 ---
+  // --- 处理登录请求 ---
   if (message.type === "LOGIN") {
     loginWithGitHub()
-      .then(token => {
-        console.log("GitHub Token 获取成功!");
-        // 你可以将 token 存入 chrome.storage 方便后续使用
-        chrome.storage.local.set({ github_token: token });
+      .then(async (token) => {
+        await chrome.storage.local.set({ github_token: token });
+        await initCloudStorage(token);
         sendResponse({ status: "success", token: token });
       })
       .catch(err => {
-        console.error("登录失败:", err);
         sendResponse({ status: "error", message: err.message });
       });
     return true; // 保持异步连接
@@ -152,3 +150,43 @@ async function exchangeCodeForToken(code) {
   const data = await response.json();
   return data.access_token;
 }
+
+async function initCloudStorage(token) {
+  try {
+    // 1.检查是否已经记录过Gist ID (避免重复创建)
+    const saved = await chrome.storage.local.get(['gist_id']);
+    if (saved.gist_id) {
+      consold.log("监测到已存在的云端存储 ID:", saved.gist_id);
+      return;
+    }
+    // 2.如果没有，就创建一个新的私有Gist
+    const response = await fetch('https://api.github.com/gists',{
+      method: 'POST',
+      headers: {
+        'Authorization': 'token ${token}',
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      body: JSON.stringify({
+        description: "YT-Marker 视频标记数据",
+        public: false,
+        files: {
+          "yt_marker_data.json": {
+            "content": JSON.stringify({ last_sync: Date.now(), videos: [] })
+          }
+        }
+      })
+    });
+
+    const data = await response.json();
+    if (data.id) {
+      // 3. 把这个唯一的Gist ID存起来，以后所有的更新都针对它
+      await chrome.storage.local.set({ gist_id: data.id });
+      console.log("云端数据库创建成功！URL：", data.html_url);
+    }
+  } catch (err) {
+    console.error("初始化云端存储失败:", err);
+  }
+}
+
+  const data = await response.json();
+  console.log("云端存储已初始化:", data.html_url);
