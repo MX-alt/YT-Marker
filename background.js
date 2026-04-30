@@ -18,13 +18,11 @@ function openDB() {
   });
 }
 
-// 核心业务逻辑：切换状态
 async function toggleVideoStatus(videoId) {
   const db = await openDB();
   return new Promise((resolve) => {
     const tx = db.transaction([STORE_NAME], "readwrite");
     const store = tx.objectStore(STORE_NAME);
-    
     const getReq = store.get(videoId);
     getReq.onsuccess = () => {
       if (getReq.result) {
@@ -38,7 +36,6 @@ async function toggleVideoStatus(videoId) {
   });
 }
 
-// 获取全量数据接口
 async function getAllWatchedVideos() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -49,7 +46,7 @@ async function getAllWatchedVideos() {
   });
 }
 
-// --- 2. 插件安装与右键菜单初始化 ---
+// --- 2. 插件安装与右键菜单 ---
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "markAsWatched",
@@ -59,37 +56,30 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// --- 3. 消息中心 (路由器) ---
+// --- 3. 消息中心 ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // 保存视频逻辑
   if (message.type === "SAVE_VIDEO") {
-    toggleVideoStatus(message.id).then(status => {
-      sendResponse({ status: "success", detail: status });
-    }).catch(err => sendResponse({ status: "error", error: err }));
+    toggleVideoStatus(message.id).then(status => sendResponse({ status: "success", detail: status }));
     return true; 
   }
 
-  // 获取数据逻辑
   if (message.type === "GET_ALL_WATCHED") {
-    getAllWatchedVideos().then(ids => {
-      sendResponse({ data: ids });
-    }).catch(() => sendResponse({ data: [] }));
+    getAllWatchedVideos().then(ids => sendResponse({ data: ids }));
     return true;
   }
 
-  // --- 处理登录请求 ---
   if (message.type === "LOGIN") {
-      (async () => {
-        try {
-          const token = await loginWithGitHub();
-          await chrome.storage.local.set({ github_token: token });
-          await initCloudStorage(token);
-          sendResponse({ status: "success", token: token });
+    (async () => {
+      try {
+        const token = await loginWithGitHub();
+        await chrome.storage.local.set({ github_token: token });
+        await initCloudStorage(token);
+        sendResponse({ status: "success", token: token });
       } catch (err) {
         sendResponse({ status: "error", message: err.message });
       }
     })();
-    return true; // 保持异步连接
+    return true;
   }
 });
 
@@ -97,7 +87,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "markAsWatched") {
     const match = info.linkUrl.match(/[?&]v=([^&#]+)/);
     const videoId = match ? match[1] : null;
-
     if (videoId) {
       await toggleVideoStatus(videoId);
       chrome.tabs.sendMessage(tab.id, { action: "refreshUI" });
@@ -105,25 +94,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// 建议：把登录逻辑封装成一个函数，由用户点击触发，而不是插件一启动就执行
+// --- 4. GitHub API 逻辑 ---
 async function loginWithGitHub() {
-  const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${REDIRECT_URL}&scope=read:user`;
+  // 注意：这里 scope 改成了 gist
+  const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${REDIRECT_URL}&scope=gist`;
 
   return new Promise((resolve, reject) => {
-    chrome.identity.launchWebAuthFlow({
-      url: authUrl,
-      interactive: true
-    }, async (redirectUrl) => {
-      if (chrome.runtime.lastError || !redirectUrl) {
-        return reject(chrome.runtime.lastError);
-      }
-
-      // 从回调 URL 中提取 code
-      const url = new URL(redirectUrl);
-      const code = url.searchParams.get('code');
-      
+    chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, async (redirectUrl) => {
+      if (chrome.runtime.lastError || !redirectUrl) return reject(chrome.runtime.lastError);
+      const code = new URL(redirectUrl).searchParams.get('code');
       if (code) {
-        // 接下来去换取 Token
         const token = await exchangeCodeForToken(code);
         resolve(token);
       }
@@ -131,40 +111,29 @@ async function loginWithGitHub() {
   });
 }
 
-// 交换 Token 的函数 (注意：Secret 建议放在后端，这里仅作本地演示)
 async function exchangeCodeForToken(code) {
-  const GITHUB_CLIENT_SECRET = 'b6dfe65c8fd1aa30b52b8e430c4c13f7f951e67c'; // 你之前记下的 Secret
-  
+  const GITHUB_CLIENT_SECRET = 'b6dfe65c8fd1aa30b52b8e430c4c13f7f951e67c';
   const response = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({
-      client_id: GITHUB_CLIENT_ID,
-      client_secret: GITHUB_CLIENT_SECRET,
-      code: code
-    })
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, client_secret: GITHUB_CLIENT_SECRET, code: code })
   });
-
   const data = await response.json();
   return data.access_token;
 }
 
 async function initCloudStorage(token) {
   try {
-    // 1.检查是否已经记录过Gist ID (避免重复创建)
     const saved = await chrome.storage.local.get(['gist_id']);
     if (saved.gist_id) {
-      consold.log("监测到已存在的云端存储 ID:", saved.gist_id);
+      console.log("检测到已存在的云端存储 ID:", saved.gist_id);
       return;
     }
-    // 2.如果没有，就创建一个新的私有Gist
-    const response = await fetch('https://api.github.com/gists',{
+
+    const response = await fetch('https://api.github.com/gists', {
       method: 'POST',
       headers: {
-        'Authorization': 'token ${token}',
+        'Authorization': `token ${token}`, // 使用反引号
         'Accept': 'application/vnd.github.v3+json'
       },
       body: JSON.stringify({
@@ -180,7 +149,6 @@ async function initCloudStorage(token) {
 
     const data = await response.json();
     if (data.id) {
-      // 3. 把这个唯一的Gist ID存起来，以后所有的更新都针对它
       await chrome.storage.local.set({ gist_id: data.id });
       console.log("云端数据库创建成功！URL：", data.html_url);
     }
@@ -188,6 +156,3 @@ async function initCloudStorage(token) {
     console.error("初始化云端存储失败:", err);
   }
 }
-
-  const data = await response.json();
-  console.log("云端存储已初始化:", data.html_url);
