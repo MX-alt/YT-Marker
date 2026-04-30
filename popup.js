@@ -22,3 +22,10 @@ chrome.storage.local.get(['github_token'], (result) => {
     document.getElementById('status').innerText = "已登录 GitHub";
   }
 });
+
+document.getElementById('logout-btn').addEventListener('click', () => {
+  chrome.storage.local.remove(['github_token', 'gist_id'], () => {
+    alert('已登出，缓存已清理');
+    window.close(); // 关闭弹窗
+  });
+});
