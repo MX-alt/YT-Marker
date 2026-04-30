@@ -32,6 +32,11 @@ async function handleLogin(sendResponse) {
     const token = await loginWithGitHub();
     await chrome.storage.local.set({ github_token: token });
     await initCloudStorage(token);
+    
+    // --- 增加这一行：登录成功后立刻执行一次全量同步 ---
+    const allVideos = await getAllWatchedVideos();
+    await updateCloudData(allVideos); 
+    
     sendResponse({ status: "success" });
   } catch (err) {
     sendResponse({ status: "error", message: err.message });
